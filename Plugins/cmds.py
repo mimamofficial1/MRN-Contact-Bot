@@ -9,17 +9,21 @@ from config import ADMIN
 async def start_cmd(client: Client, message: Message):
     user_id = message.from_user.id
     mention_user = message.from_user.mention
-    start_text = f"""<blockquote><b><i>Hii, {mention_user} ✌
+    start_text = f"""<blockquote><b><i>💌Hello, {mention_user} Dear Subscriber, Welcome To Our Bot
 
-☆ HOW ARE YOU.. 
-☆ THIS IS A CONTACT BOT.. 
-☆ JUST SEND YOUR MESSAGE HERE.. 
-☆ OWNER WILL REPLY SOON.. 
-☆ YOU CAN CHAT WITH OWNER USING THIS BOT..
+☆ Through This Bot You Can Contact Us...
+
+🔵You Ask Something, Promotion, etc.
+🟢You Will Get Updates.
+🔴You Can Request Movie Series & TV Show
+
+Join : https://t.me/Mrn_Officialx
+━━━━━━━━━━━━━━━━━━━━━
+😘Join - Share - Like >>> @Mrn_Officialx⚡
 </i></b></blockquote>"""
     await client.send_photo(
         chat_id=message.chat.id,
-        photo="https://telegra.ph/file/d46c99c49cb7e19d5df0c-2b2c7af88c6e67e838.jpg",
+        photo="https://files.catbox.moe/n69gs0.jpg",
         caption=start_text,
         parse_mode=enums.ParseMode.HTML
     )
