@@ -3,32 +3,28 @@ import sys
 import asyncio
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message
-from config import ADMIN
+from database import admin_filter, add_user, is_banned
+from Plugins.contact import is_subscribed, force_sub_markup, send_start_message
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start_cmd(client: Client, message: Message):
     user_id = message.from_user.id
     mention_user = message.from_user.mention
-    start_text = f"""<blockquote><b><i>💌Hello, {mention_user} Dear Subscriber, Welcome To Our Bot
 
-☆ Through This Bot You Can Contact Us...
+    if await is_banned(user_id):
+        return
 
-🔵You Ask Something, Promotion, etc.
-🟢You Will Get Updates.
-🔴You Can Request Movie Series & TV Show
+    if not await is_subscribed(client, user_id):
+        return await message.reply(
+            "<blockquote><b><i>Please join our channel(s) first to use this bot.</i></b></blockquote>",
+            parse_mode=enums.ParseMode.HTML,
+            reply_markup=await force_sub_markup(client, user_id)
+        )
 
-Join : https://t.me/Mrn_Officialx
-━━━━━━━━━━━━━━━━━━━━━
-😘Join - Share - Like >>> @Mrn_Officialx⚡
-</i></b></blockquote>"""
-    await client.send_photo(
-        chat_id=message.chat.id,
-        photo="https://files.catbox.moe/n69gs0.jpg",
-        caption=start_text,
-        parse_mode=enums.ParseMode.HTML
-    )
+    await add_user(user_id, message.from_user.first_name or "", message.from_user.username or "")
+    await send_start_message(client, message.chat.id, mention_user)
 
-@Client.on_message(filters.command("restart") & filters.private & filters.user(ADMIN))
+@Client.on_message(filters.command("restart") & filters.private & admin_filter)
 async def restart_bot(client: Client, message: Message):
     steve = await message.reply_text("**🔄 Restarting bot...**")
     await asyncio.sleep(3)
