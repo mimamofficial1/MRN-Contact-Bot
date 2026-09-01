@@ -1,3 +1,4 @@
+import html
 from pyrogram import Client, filters, enums, StopPropagation
 from pyrogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -256,7 +257,10 @@ async def bc_media_see_cb(client: Client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex("^bc_text$") & admin_filter)
 async def bc_text_cb(client: Client, query: CallbackQuery):
     pending[query.from_user.id] = {"action": "bc_text", "temp": {}}
-    await query.message.edit_text("**Send the broadcast text/caption.**", reply_markup=cancel_btn())
+    await query.message.edit_text(
+        "**Send the broadcast text/caption.**\n_Use `{mention}` to insert each user's name._",
+        reply_markup=cancel_btn()
+    )
 
 @Client.on_callback_query(filters.regex("^bc_text_see$") & admin_filter)
 async def bc_text_see_cb(client: Client, query: CallbackQuery):
@@ -293,12 +297,13 @@ async def bc_preview_cb(client: Client, query: CallbackQuery):
     if not d["text"] and not d["media_file_id"]:
         return await query.answer("Nothing to preview yet.", show_alert=True)
     markup = build_buttons_markup(d["buttons"])
+    text = (d["text"] or "").replace("{mention}", query.from_user.mention)
     if d["media_type"] == "photo":
-        await client.send_photo(query.message.chat.id, d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await client.send_photo(query.message.chat.id, d["media_file_id"], caption=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     elif d["media_type"] == "video":
-        await client.send_video(query.message.chat.id, d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await client.send_video(query.message.chat.id, d["media_file_id"], caption=text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     else:
-        await client.send_message(query.message.chat.id, d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+        await client.send_message(query.message.chat.id, text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     await query.answer()
 
 @Client.on_callback_query(filters.regex("^bc_send$") & admin_filter)
@@ -315,12 +320,15 @@ async def bc_send_cb(client: Client, query: CallbackQuery):
     async for user in users:
         total += 1
         try:
+            user_name = user.get("first_name") or "there"
+            user_mention = f'<a href="tg://user?id={user["user_id"]}">{html.escape(user_name)}</a>'
+            personal_text = (d["text"] or "").replace("{mention}", user_mention)
             if d["media_type"] == "photo":
-                sent = await client.send_photo(user["user_id"], d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                sent = await client.send_photo(user["user_id"], d["media_file_id"], caption=personal_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             elif d["media_type"] == "video":
-                sent = await client.send_video(user["user_id"], d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                sent = await client.send_video(user["user_id"], d["media_file_id"], caption=personal_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             else:
-                sent = await client.send_message(user["user_id"], d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
+                sent = await client.send_message(user["user_id"], personal_text, reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             if d["pin"]:
                 try:
                     await sent.pin()
