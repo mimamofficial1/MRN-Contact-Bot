@@ -6,19 +6,31 @@
 
 ## Features
 
-- [x] Forward User Messages To Owner
-- [x] Reply To User Directly From Owner Chat
+- [x] Forward User Messages To Owner/Admins
+- [x] Reply To User Directly From Owner/Admin Chat
 - [x] Auto Cooldown Message (No Spam)
 - [x] Auto Memory Cleanup
-- [x] Restart Bot Anytime (Owner Only)
+- [x] Restart Bot Anytime (Admin Only)
+- [x] Full Button-Based Settings Panel (`/settings`)
+- [x] Automatic Keyword Replies
+- [x] Force Join One Or More Channels
+- [x] Customizable Start Message (Media / Text / Buttons)
+- [x] Broadcast Message To All Users (Media / Text / Buttons / Pin)
+- [x] Multi-Admin Support (Add/Remove Admins)
+- [x] Ban / Unban Users
+- [x] Bot Statistics
 - [x] 24x7 Uptime With Built-In Web Server
 
 ## Commands
 
 ```
 start - check I'm alive
-restart - restart bot (owner only)
+settings - open the bot settings panel (admin only)
+restart - restart bot (admin only)
 ```
+
+All other management (automatic replies, force join, start message, broadcast,
+admins, banned users, statistics) is done through the `/settings` button menu.
 
 ## Variables
 
@@ -26,6 +38,10 @@ restart - restart bot (owner only)
 * `API_HASH` API Hash from my.telegram.org
 * `BOT_TOKEN` Bot token from @BotFather
 * `ADMIN` Telegram Account Id of Owner
+* `DATABASE_URI` MongoDB connection string (required — used for users, admins, bans, settings)
+* `DATABASE_NAME` MongoDB database name (optional, defaults to `MRNContactBot`)
+
+Force-join channels are managed from `/settings → Force join` (no env var needed anymore).
 
 
 ## How To Deploy
