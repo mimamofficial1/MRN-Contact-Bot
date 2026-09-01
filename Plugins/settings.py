@@ -30,7 +30,7 @@ def cancel_btn():
 
 def main_menu_markup():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("abc Automatic replies", callback_data="ar_menu"),
+        [InlineKeyboardButton("🔤 Automatic replies", callback_data="ar_menu"),
          InlineKeyboardButton("🔑 Force join", callback_data="fj_menu")],
         [InlineKeyboardButton("👋 Start message", callback_data="sm_menu"),
          InlineKeyboardButton("📬 Broadcast", callback_data="bc_menu")],
@@ -73,7 +73,7 @@ async def render_ar_menu():
     buttons = [[InlineKeyboardButton(f"❌ {r['keyword']}", callback_data=f"ar_del:{r['keyword']}")] for r in replies]
     buttons.append([InlineKeyboardButton("➕ Add keyword", callback_data="ar_add")])
     buttons.append([InlineKeyboardButton("🏠 Menu", callback_data="menu"), InlineKeyboardButton("⬅ Back", callback_data="menu")])
-    text = "**abc Automatic replies**\n_Send an automatic reply when a user types a keyword._"
+    text = "**🔤 Automatic replies**\n_Send an automatic reply when a user types a keyword._"
     return text, InlineKeyboardMarkup(buttons)
 
 @Client.on_callback_query(filters.regex("^ar_menu$") & admin_filter)
@@ -137,7 +137,7 @@ async def fj_del_cb(client: Client, query: CallbackQuery):
 def sm_menu_markup():
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🖼 Media", callback_data="sm_media"), InlineKeyboardButton("👀 See", callback_data="sm_media_see")],
-        [InlineKeyboardButton("abc Text", callback_data="sm_text"), InlineKeyboardButton("👀 See", callback_data="sm_text_see")],
+        [InlineKeyboardButton("🔤 Text", callback_data="sm_text"), InlineKeyboardButton("👀 See", callback_data="sm_text_see")],
         [InlineKeyboardButton("⌨️ Buttons", callback_data="sm_buttons"), InlineKeyboardButton("👀 See", callback_data="sm_buttons_see")],
         [InlineKeyboardButton("👀 Full preview", callback_data="sm_preview")],
         [InlineKeyboardButton("🏠 Menu", callback_data="menu"), InlineKeyboardButton("⬅ Back", callback_data="menu")]
@@ -171,7 +171,7 @@ async def sm_text_cb(client: Client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex("^sm_text_see$") & admin_filter)
 async def sm_text_see_cb(client: Client, query: CallbackQuery):
     doc = await get_start_message()
-    await query.message.reply(f"**Current start text:**\n\n{doc.get('text', '')}")
+    await query.message.reply(f"<b>Current start text:</b>\n\n{doc.get('text', '')}", parse_mode=enums.ParseMode.HTML)
     await query.answer()
 
 @Client.on_callback_query(filters.regex("^sm_buttons$") & admin_filter)
@@ -225,7 +225,7 @@ def bc_menu_markup(admin_id):
     pin_label = "📌 Pin: YES" if d["pin"] else "📌 Pin: NO"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🖼 Media", callback_data="bc_media"), InlineKeyboardButton("👀 See", callback_data="bc_media_see")],
-        [InlineKeyboardButton("abc Text", callback_data="bc_text"), InlineKeyboardButton("👀 See", callback_data="bc_text_see")],
+        [InlineKeyboardButton("🔤 Text", callback_data="bc_text"), InlineKeyboardButton("👀 See", callback_data="bc_text_see")],
         [InlineKeyboardButton("⌨️ Buttons", callback_data="bc_buttons"), InlineKeyboardButton("👀 See", callback_data="bc_buttons_see")],
         [InlineKeyboardButton(pin_label, callback_data="bc_pin")],
         [InlineKeyboardButton("👀 Full preview", callback_data="bc_preview")],
@@ -257,7 +257,7 @@ async def bc_text_cb(client: Client, query: CallbackQuery):
 @Client.on_callback_query(filters.regex("^bc_text_see$") & admin_filter)
 async def bc_text_see_cb(client: Client, query: CallbackQuery):
     d = get_draft(query.from_user.id)
-    await query.message.reply(f"**Current broadcast text:**\n\n{d['text'] or '_empty_'}")
+    await query.message.reply(f"<b>Current broadcast text:</b>\n\n{d['text'] or '<i>empty</i>'}", parse_mode=enums.ParseMode.HTML)
     await query.answer()
 
 @Client.on_callback_query(filters.regex("^bc_buttons$") & admin_filter)
@@ -290,11 +290,11 @@ async def bc_preview_cb(client: Client, query: CallbackQuery):
         return await query.answer("Nothing to preview yet.", show_alert=True)
     markup = build_buttons_markup(d["buttons"])
     if d["media_type"] == "photo":
-        await client.send_photo(query.message.chat.id, d["media_file_id"], caption=d["text"] or "", reply_markup=markup)
+        await client.send_photo(query.message.chat.id, d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     elif d["media_type"] == "video":
-        await client.send_video(query.message.chat.id, d["media_file_id"], caption=d["text"] or "", reply_markup=markup)
+        await client.send_video(query.message.chat.id, d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     else:
-        await client.send_message(query.message.chat.id, d["text"] or "", reply_markup=markup)
+        await client.send_message(query.message.chat.id, d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
     await query.answer()
 
 @Client.on_callback_query(filters.regex("^bc_send$") & admin_filter)
@@ -312,11 +312,11 @@ async def bc_send_cb(client: Client, query: CallbackQuery):
         total += 1
         try:
             if d["media_type"] == "photo":
-                sent = await client.send_photo(user["user_id"], d["media_file_id"], caption=d["text"] or "", reply_markup=markup)
+                sent = await client.send_photo(user["user_id"], d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             elif d["media_type"] == "video":
-                sent = await client.send_video(user["user_id"], d["media_file_id"], caption=d["text"] or "", reply_markup=markup)
+                sent = await client.send_video(user["user_id"], d["media_file_id"], caption=d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             else:
-                sent = await client.send_message(user["user_id"], d["text"] or "", reply_markup=markup)
+                sent = await client.send_message(user["user_id"], d["text"] or "", reply_markup=markup, parse_mode=enums.ParseMode.HTML)
             if d["pin"]:
                 try:
                     await sent.pin()
@@ -460,7 +460,7 @@ async def pending_input_handler(client: Client, message: Message):
     elif action == "ar_add_reply":
         if not message.text:
             return await message.reply("Please send text.", reply_markup=cancel_btn())
-        await add_auto_reply(temp["keyword"], message.text)
+        await add_auto_reply(temp["keyword"], message.text.html)
         pending.pop(admin_id, None)
         text, markup = await render_ar_menu()
         await message.reply(f"✅ Auto-reply added for keyword `{temp['keyword']}`.")
@@ -493,7 +493,7 @@ async def pending_input_handler(client: Client, message: Message):
     elif action == "sm_text":
         if not message.text:
             return await message.reply("Please send text.", reply_markup=cancel_btn())
-        await set_start_message_field("text", message.text)
+        await set_start_message_field("text", message.text.html)
         pending.pop(admin_id, None)
         await message.reply("✅ Start message text updated.", reply_markup=sm_menu_markup())
 
@@ -522,7 +522,7 @@ async def pending_input_handler(client: Client, message: Message):
     elif action == "bc_text":
         if not message.text:
             return await message.reply("Please send text.", reply_markup=cancel_btn())
-        get_draft(admin_id)["text"] = message.text
+        get_draft(admin_id)["text"] = message.text.html
         pending.pop(admin_id, None)
         await message.reply("✅ Broadcast text set.", reply_markup=bc_menu_markup(admin_id))
 
