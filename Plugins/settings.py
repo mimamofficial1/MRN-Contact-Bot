@@ -202,12 +202,16 @@ async def sm_preview_cb(client: Client, query: CallbackQuery):
 def parse_buttons_text(text: str):
     rows = []
     for line in text.strip().splitlines():
+        if not line.strip():
+            continue
         row = []
         for part in line.split("|"):
-            if "-" not in part:
+            if " - " not in part:
                 continue
-            btn_text, url = part.rsplit("-", 1)
-            row.append({"text": btn_text.strip(), "url": url.strip()})
+            btn_text, url = part.split(" - ", 1)  # split on first ' - ' only, so hyphens inside the URL (e.g. invite links) are safe
+            btn_text, url = btn_text.strip(), url.strip()
+            if btn_text and url:
+                row.append({"text": btn_text, "url": url})
         if row:
             rows.append(row)
     return rows
