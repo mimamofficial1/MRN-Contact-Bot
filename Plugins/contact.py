@@ -1,4 +1,4 @@
-import time
+import asyncio
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant
@@ -6,12 +6,11 @@ from config import ADMIN
 from database import add_user, is_banned, get_admins, admin_filter, get_force_channels, find_auto_reply, get_start_message
 
 # RAM memory dictionaries
-user_cooldowns = {}
 message_memory = {}  # {(admin_id, forwarded_msg_id): user_id}
 
 # Constants
-COOLDOWN_TIME = 300  # 5 minutes in seconds
 MAX_MEMORY_LIMIT = 100  # Max records before auto-cleaning
+SENT_CONFIRM_DELETE_AFTER = 3  # seconds before "Message sent!" auto-deletes
 
 
 async def get_not_joined_channels(client: Client, user_id: int) -> list:
@@ -65,7 +64,7 @@ async def forward_to_admin(client: Client, message: Message):
     if message.text:
         auto_reply = await find_auto_reply(message.text)
         if auto_reply:
-            return await message.reply(auto_reply, quote=True)
+            return await message.reply(auto_reply, quote=True, parse_mode=enums.ParseMode.HTML)
 
     admin_ids = set(await get_admins())
     admin_ids.add(ADMIN)
@@ -82,23 +81,25 @@ async def forward_to_admin(client: Client, message: Message):
     if not sent_to_any:
         return await message.reply(f"❌ **Error:** Message could not be sent.")
 
-    current_time = time.time()
-    if current_time - user_cooldowns.get(user_id, 0) >= COOLDOWN_TIME:
-        await message.reply(
-            "<blockquote><b><i>Owner Will Be Reply Soon</i>..</b></blockquote>",
-            parse_mode=enums.ParseMode.HTML,
-            quote=True
-        )
-        user_cooldowns[user_id] = current_time
+    sent_msg = await message.reply(
+        "✅ <i>Message sent!</i>",
+        parse_mode=enums.ParseMode.HTML,
+        quote=False
+    )
+    asyncio.create_task(_delete_after_delay(sent_msg))
 
     if len(message_memory) > MAX_MEMORY_LIMIT:
         oldest_msg_keys = list(message_memory.keys())[:50]
         for key in oldest_msg_keys:
             del message_memory[key]
-    if len(user_cooldowns) > MAX_MEMORY_LIMIT:
-        oldest_user_keys = list(user_cooldowns.keys())[:50]
-        for key in oldest_user_keys:
-            del user_cooldowns[key]
+
+
+async def _delete_after_delay(msg: Message):
+    await asyncio.sleep(SENT_CONFIRM_DELETE_AFTER)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
 
 
 @Client.on_message(filters.private & admin_filter & filters.reply)
