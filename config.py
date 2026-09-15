@@ -7,3 +7,11 @@ ADMIN = int(os.environ.get("ADMIN", ""))
 
 DATABASE_URI = os.environ.get("DATABASE_URI", "")
 DATABASE_NAME = os.environ.get("DATABASE_NAME", "MRNContactBot")
+
+# AI assistant (Google Gemini). Leave GEMINI_API_KEY empty to disable AI
+# replies — the bot then behaves exactly as before (just forwards to admin).
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+
+# Footer appended to the caption/text when indexed channel content is sent to a user.
+CONTENT_FOOTER = os.environ.get("CONTENT_FOOTER", "\n\n📢 @Mrn_Officialx")
