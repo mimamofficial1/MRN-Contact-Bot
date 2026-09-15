@@ -69,7 +69,7 @@ async def forward_to_admin(client: Client, message: Message):
     if message.text:
         auto_reply = await find_auto_reply(message.text)
         if auto_reply:
-            return await message.reply(auto_reply, quote=True, parse_mode=enums.ParseMode.HTML)
+            return await message.reply(auto_reply, parse_mode=enums.ParseMode.HTML)
 
     admin_ids = set(await get_admins())
     admin_ids.add(ADMIN)
@@ -108,7 +108,7 @@ async def forward_to_admin(client: Client, message: Message):
                         caption=reply_text
                     )
                 else:
-                    await message.reply(reply_text, quote=True)
+                    await message.reply(reply_text)
                 return
             except Exception:
                 pass  # source post may be deleted/inaccessible — fall through below
@@ -120,12 +120,11 @@ async def forward_to_admin(client: Client, message: Message):
         ai_reply = await ask_gemini(history, message.text)
         if ai_reply:
             await add_chat_turns(user_id, message.text, ai_reply)
-            return await message.reply(ai_reply, quote=True)
+            return await message.reply(ai_reply)
 
     sent_msg = await message.reply(
         "✅ <i>Message sent!</i>",
-        parse_mode=enums.ParseMode.HTML,
-        quote=False
+        parse_mode=enums.ParseMode.HTML
     )
     asyncio.create_task(_delete_after_delay(sent_msg))
 
