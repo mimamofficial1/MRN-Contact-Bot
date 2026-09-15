@@ -2,7 +2,7 @@ import asyncio
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant
-from config import ADMIN, CONTENT_FOOTER
+from config import ADMIN
 from database import (
     add_user, is_banned, get_admins, admin_filter, get_force_channels,
     find_auto_reply, get_start_message, get_chat_history, add_chat_turns,
@@ -98,7 +98,7 @@ async def forward_to_admin(client: Client, message: Message):
         matches = await search_content(message.text, limit=1)
         if matches:
             match = matches[0]
-            reply_text = (match.get("text") or "") + CONTENT_FOOTER
+            reply_text = match.get("text") or ""
             try:
                 if match.get("has_media"):
                     await client.copy_message(
