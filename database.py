@@ -11,6 +11,9 @@ banned_col = db.banned
 auto_replies_col = db.auto_replies
 force_channels_col = db.force_channels
 settings_col = db.settings
+chat_history_col = db.chat_history
+content_col = db.content_index
+indexed_channels_col = db.indexed_channels
 
 
 # ---------------- Users ----------------
@@ -148,3 +151,74 @@ async def get_start_message() -> dict:
 
 async def set_start_message_field(field: str, value):
     await settings_col.update_one({"_id": "start_message"}, {"$set": {field: value}}, upsert=True)
+
+
+# ---------------- AI Chat History ----------------
+
+MAX_HISTORY_TURNS = 8  # number of user+model exchange pairs kept per user
+
+async def get_chat_history(user_id: int) -> list:
+    doc = await chat_history_col.find_one({"user_id": user_id})
+    return doc["turns"] if doc else []
+
+async def add_chat_turns(user_id: int, user_text: str, model_text: str):
+    turns = await get_chat_history(user_id)
+    turns.append({"role": "user", "text": user_text})
+    turns.append({"role": "model", "text": model_text})
+    turns = turns[-(MAX_HISTORY_TURNS * 2):]
+    await chat_history_col.update_one(
+        {"user_id": user_id},
+        {"$set": {"user_id": user_id, "turns": turns}},
+        upsert=True
+    )
+
+async def clear_chat_history(user_id: int):
+    await chat_history_col.delete_one({"user_id": user_id})
+
+
+# ---------------- Content Index (scanned channel content, searchable) ----------------
+
+_content_index_ready = False
+
+async def ensure_content_text_index():
+    """Creates the Mongo text index once (safe to call repeatedly — no-ops after the first time)."""
+    global _content_index_ready
+    if _content_index_ready:
+        return
+    await content_col.create_index([("text", "text")])
+    _content_index_ready = True
+
+async def add_indexed_channel(chat_id: int):
+    await indexed_channels_col.update_one({"chat_id": chat_id}, {"$set": {"chat_id": chat_id}}, upsert=True)
+
+async def get_indexed_channels() -> list:
+    cursor = indexed_channels_col.find({})
+    return [doc["chat_id"] async for doc in cursor]
+
+async def is_indexed_channel(chat_id: int) -> bool:
+    return await indexed_channels_col.find_one({"chat_id": chat_id}) is not None
+
+async def add_content_item(chat_id: int, message_id: int, text: str, has_media: bool = False):
+    """Stores one scanned post (text/link/image caption) so it can be searched and re-sent later."""
+    if not text:
+        return
+    await ensure_content_text_index()
+    await content_col.update_one(
+        {"chat_id": chat_id, "message_id": message_id},
+        {"$set": {"chat_id": chat_id, "message_id": message_id, "text": text, "has_media": has_media}},
+        upsert=True
+    )
+
+async def content_count() -> int:
+    return await content_col.count_documents({})
+
+async def search_content(query: str, limit: int = 1) -> list:
+    """Full-text search over indexed content. Returns the best-matching doc(s), best first."""
+    if not query:
+        return []
+    await ensure_content_text_index()
+    cursor = content_col.find(
+        {"$text": {"$search": query}},
+        {"score": {"$meta": "textScore"}, "chat_id": 1, "message_id": 1, "text": 1, "has_media": 1}
+    ).sort([("score", {"$meta": "textScore"})]).limit(limit)
+    return [doc async for doc in cursor]
