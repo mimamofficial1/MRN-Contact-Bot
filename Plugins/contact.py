@@ -2,8 +2,13 @@ import asyncio
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant
-from config import ADMIN
-from database import add_user, is_banned, get_admins, admin_filter, get_force_channels, find_auto_reply, get_start_message
+from config import ADMIN, CONTENT_FOOTER
+from database import (
+    add_user, is_banned, get_admins, admin_filter, get_force_channels,
+    find_auto_reply, get_start_message, get_chat_history, add_chat_turns,
+    search_content
+)
+from ai import ask_gemini
 
 # RAM memory dictionaries
 message_memory = {}  # {(admin_id, forwarded_msg_id): user_id}
@@ -81,17 +86,48 @@ async def forward_to_admin(client: Client, message: Message):
     if not sent_to_any:
         return await message.reply(f"❌ **Error:** Message could not be sent.")
 
+    if len(message_memory) > MAX_MEMORY_LIMIT:
+        oldest_msg_keys = list(message_memory.keys())[:50]
+        for key in oldest_msg_keys:
+            del message_memory[key]
+
+    # Indexed content match — if the user's text matches something scanned
+    # from a registered channel (see Plugins/indexer.py), send that directly
+    # instead of a generated AI reply.
+    if message.text:
+        matches = await search_content(message.text, limit=1)
+        if matches:
+            match = matches[0]
+            reply_text = (match.get("text") or "") + CONTENT_FOOTER
+            try:
+                if match.get("has_media"):
+                    await client.copy_message(
+                        chat_id=user_id,
+                        from_chat_id=match["chat_id"],
+                        message_id=match["message_id"],
+                        caption=reply_text
+                    )
+                else:
+                    await message.reply(reply_text, quote=True)
+                return
+            except Exception:
+                pass  # source post may be deleted/inaccessible — fall through below
+
+    # AI assistant reply — only for plain text, only when GEMINI_API_KEY is
+    # configured (see config.py). Admin still gets the forward above either way.
+    if message.text:
+        history = await get_chat_history(user_id)
+        ai_reply = await ask_gemini(history, message.text)
+        if ai_reply:
+            await add_chat_turns(user_id, message.text, ai_reply)
+            return await message.reply(ai_reply, quote=True)
+
     sent_msg = await message.reply(
         "✅ <i>Message sent!</i>",
         parse_mode=enums.ParseMode.HTML,
         quote=False
     )
     asyncio.create_task(_delete_after_delay(sent_msg))
-
-    if len(message_memory) > MAX_MEMORY_LIMIT:
-        oldest_msg_keys = list(message_memory.keys())[:50]
-        for key in oldest_msg_keys:
-            del message_memory[key]
 
 
 async def _delete_after_delay(msg: Message):
