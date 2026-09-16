@@ -8,7 +8,8 @@ from pyrogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 )
 from database import (
-    admin_filter, add_indexed_channel, add_content_item, is_indexed_channel
+    admin_filter, add_indexed_channel, add_content_item, is_indexed_channel,
+    clear_content_index
 )
 
 # Bots can't call get_chat_history() (Telegram blocks messages.GetHistory for bot
@@ -155,3 +156,22 @@ async def auto_index_new_post(client: Client, message: Message):
     text = _extract_text(message)
     if text:
         await add_content_item(message.chat.id, message.id, text, has_media=bool(message.photo))
+
+
+@Client.on_message(filters.command("clearindex") & filters.private & admin_filter)
+async def clearindex_cmd(client: Client, message: Message):
+    await message.reply(
+        "⚠️ **This will permanently delete ALL indexed content.**\n"
+        "_Registered channels stay registered — new posts will still auto-index after this._\n\n"
+        "Are you sure?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Yes, clear everything", callback_data="do_clearindex")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="cancel_index")]
+        ])
+    )
+
+
+@Client.on_callback_query(filters.regex("^do_clearindex$") & admin_filter)
+async def do_clearindex_cb(client: Client, query: CallbackQuery):
+    await clear_content_index()
+    await query.message.edit_text("🗑️ **All indexed content has been cleared.**")
