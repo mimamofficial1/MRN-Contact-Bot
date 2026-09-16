@@ -212,6 +212,10 @@ async def add_content_item(chat_id: int, message_id: int, text: str, has_media: 
 async def content_count() -> int:
     return await content_col.count_documents({})
 
+async def clear_content_index():
+    """Wipes all scanned content (registered channels stay registered, so auto-index of new posts keeps working)."""
+    await content_col.delete_many({})
+
 async def search_content(query: str, limit: int = 1) -> list:
     """Full-text search over indexed content. Returns the best-matching doc(s), best first."""
     if not query:
