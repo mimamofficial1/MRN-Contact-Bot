@@ -1,5 +1,5 @@
-kurigram
+kurigram==2.2.27
 pytz
 tgcrypto
-aiohttp
-motor
+aiohttp>=3.9,<4
+motor>=3.6,<4

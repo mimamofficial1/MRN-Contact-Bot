@@ -8,12 +8,14 @@
 
 - [x] Forward User Messages To Owner/Admins
 - [x] Reply To User Directly From Owner/Admin Chat
-- [x] Auto Cooldown Message (No Spam)
-- [x] Auto Memory Cleanup
+- [x] Cooldown On Bot Replies (No Spam) — `COOLDOWN_SECONDS`
+- [x] Reply Mapping Stored In MongoDB (replies keep working after restarts)
+- [x] AI Assistant Replies (Google Gemini, optional)
+- [x] Channel Content Index — user text is matched against scanned channel posts and the post is sent back
 - [x] Restart Bot Anytime (Admin Only)
 - [x] Full Button-Based Settings Panel (`/settings`)
 - [x] Automatic Keyword Replies
-- [x] Force Join One Or More Channels
+- [x] Force Join One Or More Channels (username, ID or private channel)
 - [x] Customizable Start Message (Media / Text / Buttons)
 - [x] Broadcast Message To All Users (Media / Text / Buttons / Pin)
 - [x] Multi-Admin Support (Add/Remove Admins)
@@ -27,7 +29,15 @@
 start - check I'm alive
 settings - open the bot settings panel (admin only)
 restart - restart bot (admin only)
+clearindex - delete all indexed channel content (admin only)
 ```
+
+### Channel content index (admin only)
+
+Forward the **last post** of a channel (or send just its `t.me/...` post link) to the bot and
+confirm. The bot scans every post up to that ID (text, links and captions) and keeps indexing new
+posts, edits and deletions automatically. When a user's message matches indexed posts, that post is
+sent back instead of an AI answer. The bot must be a member/admin of the channel.
 
 All other management (automatic replies, force join, start message, broadcast,
 admins, banned users, statistics) is done through the `/settings` button menu.
@@ -40,6 +50,12 @@ admins, banned users, statistics) is done through the `/settings` button menu.
 * `ADMIN` Telegram Account Id of Owner
 * `DATABASE_URI` MongoDB connection string (required — used for users, admins, bans, settings)
 * `DATABASE_NAME` MongoDB database name (optional, defaults to `MRNContactBot`)
+* `GEMINI_API_KEY` Google Gemini API key (optional — leave empty to disable AI replies)
+* `GEMINI_MODEL` Gemini model name (optional, defaults to `gemini-3.6-flash`)
+* `AI_EXTRA_PROMPT` Extra instructions for the AI, e.g. what your channel is about (optional)
+* `COOLDOWN_SECONDS` Minimum seconds between two bot-generated replies to the same user (optional, defaults to `5`)
+
+The bot stops at startup with a clear message if a required variable is missing.
 
 Force-join channels are managed from `/settings → Force join` (no env var needed anymore).
 
@@ -50,6 +66,8 @@ Force-join channels are managed from `/settings → Force join` (no env var need
 * Get `BOT_TOKEN` from [@BotFather](https://t.me/BotFather)
 * Get your `ADMIN` id from [@userinfobot](https://t.me/userinfobot)
 * Deploy using any one method below, fill the variables, and you're done.
+
+> ⚠️ The deploy buttons below point to the upstream repo. Replace the repository URL in each link with your own fork, otherwise you'll deploy the original code.
 
 ### Deploy To Heroku
 
