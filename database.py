@@ -234,6 +234,20 @@ async def add_chat_turns(user_id: int, user_text: str, model_text: str):
     )
 
 
+# ---------------- Startup notice throttle ----------------
+
+async def should_send_startup_notice(window: int = 30) -> bool:
+    """False if a startup notice was already sent in the last `window` seconds — a crash-looping
+    host (Railway/Koyeb/Heroku restarting the app over and over) can't spam the admin."""
+    import time
+    now = time.time()
+    doc = await settings_col.find_one({"_id": "startup_notice"})
+    if doc and now - doc.get("ts", 0) < window:
+        return False
+    await settings_col.update_one({"_id": "startup_notice"}, {"$set": {"ts": now}}, upsert=True)
+    return True
+
+
 # ---------------- Admin-side reply mapping ----------------
 # Maps "message forwarded to admin X" -> original user, so replies keep working
 # after restarts and for users who hide their forward info. Auto-expires (30 days).

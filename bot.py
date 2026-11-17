@@ -2,8 +2,10 @@ import os
 from pyrogram import Client
 from aiohttp import web
 from config import API_ID, API_HASH, BOT_TOKEN, ADMIN
-from database import ensure_indexes
+from database import ensure_indexes, should_send_startup_notice
 from ai import close_session
+
+STARTUP_TEXT = "✨ ᴍʀɴ ᴄᴏɴᴛᴀᴄᴛ ʙᴏᴛ ɪs ɴᴏᴡ ᴏɴʟɪɴᴇ !"
 
 routes = web.RouteTableDef()
 
@@ -25,7 +27,8 @@ class Bot(Client):
             bot_token=BOT_TOKEN,
             plugins=dict(root="Plugins"),
             workers=64,
-            sleep_threshold=15
+            sleep_threshold=15,
+            skip_updates=True  # never replay messages that arrived while the bot was offline
         )
         self._web_runner = None
 
@@ -50,9 +53,11 @@ class Bot(Client):
         me = await self.get_me()
         print(f"Bot Started as {me.first_name}")
 
+        # One message per start; skipped if one went out in the last 30s (crash-loop protection).
         if ADMIN:
             try:
-                await self.send_message(ADMIN, f"**🤖 {me.first_name} Contact Bot is started...**")
+                if await should_send_startup_notice():
+                    await self.send_message(ADMIN, STARTUP_TEXT)
             except Exception as e:
                 print(f"Error sending message to admin: {e}")
 
