@@ -5,12 +5,12 @@ import time
 from collections import deque
 from pyrogram import Client, filters, enums, raw
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import UserNotParticipant, UserIsBlocked, InputUserDeactivated
+from pyrogram.errors import UserNotParticipant, UserIsBlocked, InputUserDeactivated, RPCError
 from config import ADMIN, COOLDOWN_SECONDS
 from database import (
     add_user, is_banned, get_admins, admin_filter, get_force_channels,
     find_auto_reply, get_start_message, get_chat_history, add_chat_turns,
-    search_content, save_message_map, get_mapped_user
+    search_content, save_message_map, get_mapped_user, remove_content_item
 )
 from ai import ask_gemini
 from Plugins.indexer import LINK_ONLY_REGEX
@@ -231,9 +231,13 @@ def _user_info(user) -> tuple:
     return text, markup
 
 
+def _rnd_id() -> int:
+    return int.from_bytes(os.urandom(8), "big", signed=True)
+
+
 async def _forward_exact(client: Client, to_chat_id: int, from_chat_id, message_id: int, reply_to_id: int = None):
-    """Server-side copy WITHOUT the "Forwarded from" header. Telegram copies the post as it is: media, captions,
-    custom link preview, premium emoji, buttons — identical to the channel post."""
+    """Server-side copy WITHOUT the "Forwarded from" header (photo/video/file posts): media, caption,
+    formatting, premium emoji and buttons come over exactly as in the channel."""
     extra = {}
     if reply_to_id:
         extra["reply_to"] = raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_id)
@@ -241,22 +245,85 @@ async def _forward_exact(client: Client, to_chat_id: int, from_chat_id, message_
         from_peer=await client.resolve_peer(from_chat_id),
         to_peer=await client.resolve_peer(to_chat_id),
         id=[message_id],
-        random_id=[int.from_bytes(os.urandom(8), "big", signed=True)],
+        random_id=[_rnd_id()],
         drop_author=True,
         **extra
     ))
 
 
+async def _get_raw_post(client: Client, chat_id, message_id: int):
+    """The channel post exactly as Telegram stores it (text, entities, link-preview settings, buttons).
+    Returns None if the post no longer exists. Raises if it can't be read."""
+    peer = await client.resolve_peer(chat_id)
+    ref = [raw.types.InputMessageID(id=message_id)]
+    if isinstance(peer, raw.types.InputPeerChannel):
+        res = await client.invoke(raw.functions.channels.GetMessages(
+            channel=raw.types.InputChannel(channel_id=peer.channel_id, access_hash=peer.access_hash), id=ref))
+    else:
+        res = await client.invoke(raw.functions.messages.GetMessages(id=ref))
+    post = (getattr(res, "messages", None) or [None])[0]
+    return post if isinstance(post, raw.types.Message) else None
+
+
+async def _send_post_copy(client: Client, to_chat_id: int, post, reply_to_id: int = None):
+    """Re-sends a text post with EVERYTHING the channel post has: the same entities (premium emoji, hidden
+    links, bold...), the same link preview (its own URL, large/small, above/below the text) and the same buttons.
+    A plain re-send can't do that: Telegram would build the preview from the first link in the text instead."""
+    media = post.media
+    web = media.webpage if isinstance(media, raw.types.MessageMediaWebPage) else None
+    peer = await client.resolve_peer(to_chat_id)
+    reply_to = raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_id) if reply_to_id else None
+
+    async def send(entities):
+        common = dict(
+            peer=peer, message=post.message or "", random_id=_rnd_id(), entities=entities or None,
+            reply_markup=post.reply_markup, reply_to=reply_to, invert_media=True if post.invert_media else None,
+        )
+        if isinstance(web, raw.types.WebPage) and web.url:        # the post shows a specific preview
+            return await client.invoke(raw.functions.messages.SendMedia(
+                media=raw.types.InputMediaWebPage(
+                    url=web.url,
+                    force_large_media=True if media.force_large_media else None,
+                    force_small_media=True if media.force_small_media else None,
+                ), **common))
+        # no preview on the original post (media is None) -> make sure Telegram doesn't invent one
+        return await client.invoke(raw.functions.messages.SendMessage(
+            no_webpage=True if media is None else None, **common))
+
+    try:
+        return await send(post.entities)
+    except RPCError as e:
+        if not any(isinstance(x, raw.types.MessageEntityCustomEmoji) for x in (post.entities or [])):
+            raise
+        # this bot can't use the post's premium emoji (bot owner without Premium?) -> same post, normal emoji
+        print(f"[index] premium emoji refused ({type(e).__name__}); sending with normal emoji")
+        plain = [x for x in (post.entities or []) if not isinstance(x, raw.types.MessageEntityCustomEmoji)]
+        return await send(plain)
+
+
 async def _send_indexed(client: Client, message: Message, match: dict) -> bool:
     """Sends an indexed post back to the user exactly as it is in the channel. Returns False if it couldn't be sent."""
+    chat_id, post_id = match["chat_id"], match["message_id"]
+    post = None
     try:
-        await _forward_exact(client, message.chat.id, match["chat_id"], match["message_id"], reply_to_id=message.id)
+        post = await _get_raw_post(client, chat_id, post_id)
+        if post is None:  # deleted from the channel -> never serve the stale copy, drop it from the index
+            await remove_content_item(chat_id, post_id)
+            return False
+    except Exception as e:
+        print(f"[index] couldn't read the original post ({type(e).__name__}: {e})")
+
+    try:
+        if post is not None and (post.media is None or isinstance(post.media, raw.types.MessageMediaWebPage)):
+            await _send_post_copy(client, message.chat.id, post, reply_to_id=message.id)   # text post (+ its preview)
+        else:
+            await _forward_exact(client, message.chat.id, chat_id, post_id, reply_to_id=message.id)  # photo/video/file
         return True
     except Exception as e:
-        print(f"[index] exact copy failed ({e}); falling back to a re-send")  # e.g. channel has "restrict saving content"
+        print(f"[index] exact copy failed ({type(e).__name__}: {e}); falling back to a re-send")
     try:
         if match.get("has_media"):
-            await client.copy_message(message.chat.id, match["chat_id"], match["message_id"])
+            await client.copy_message(message.chat.id, chat_id, post_id)
         else:
             text = match.get("html") or match.get("text") or ""
             try:
@@ -265,7 +332,7 @@ async def _send_indexed(client: Client, message: Message, match: dict) -> bool:
                 await message.reply(match.get("text") or "", parse_mode=enums.ParseMode.DISABLED)
         return True
     except Exception as e:
-        print(f"[index] couldn't send indexed post: {e}")  # source post may be deleted/inaccessible
+        print(f"[index] couldn't send indexed post: {e}")  # source post may be inaccessible
         return False
 
 
