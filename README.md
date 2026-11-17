@@ -1,9 +1,5 @@
 # Telegram Contact Bot
 
-<p align="center">
-  <img src="https://i.ibb.co/pBHyMP4d/photo-AQADrx-Fr-G4-EAAe-FXfg.jpg" alt="MRN-CONTACT-BOT Logo">
-</p>
-
 <b>Chat With Owner Directly Through This Bot.</b>
 
 ![Typing SVG](https://readme-typing-svg.herokuapp.com/?lines=Welcome+To+Telegram+Contact+Bot+!)
@@ -41,10 +37,21 @@ emoji - premium emoji status (admin only)
 
 `Plugins/premium_emoji.py` turns normal emoji in the bot's messages into animated **premium emoji** and shows
 premium icons on inline buttons. It needs **no setup**: it loads Telegram's animated emoji packs and learns your
-own style from channel posts / messages you send to the bot. Requirement: the account that created the bot in
+own style from channel posts / messages you send to the bot. Works on both `kurigram` and `pyrofork` (the right button format is picked automatically).
+Requirement: the account that created the bot in
 @BotFather must have **Telegram Premium** (if not, messages are simply sent with normal emoji).
 Admin commands: `/emoji` (status), `/setemoji` (+ premium emoji), `/emojipack <t.me/addemoji/...>`,
 `/delemoji`, `/emojion`, `/emojioff`, `/emojibtn on|off`.
+
+### How messages reach you (admin)
+
+* Every user message is forwarded to the owner/admins, followed by an info message:
+  `👆 Message sent by <name> [ID] #id<ID>` with a **👤 User profile** button. Reply to either of them to answer the user.
+* Your reply gets a 👍 reaction when it was delivered. If the user blocked the bot or deleted the account you get
+  `❌ Message not sent!` and a 🥴 reaction.
+* A message of yours that is not a reply gets `⚠️ Reply to a forwarded message to send a message to that user.`
+* Indexed posts are sent to users exactly as they are in the channel (media, link preview, premium emoji, buttons).
+  If the channel restricts saving content, the bot falls back to re-sending the text/media.
 
 ### Channel content index (admin only)
 
