@@ -1,10 +1,11 @@
 import asyncio
 import html
+import os
 import time
 from collections import deque
-from pyrogram import Client, filters, enums
+from pyrogram import Client, filters, enums, raw
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
-from pyrogram.errors import UserNotParticipant
+from pyrogram.errors import UserNotParticipant, UserIsBlocked, InputUserDeactivated
 from config import ADMIN, COOLDOWN_SECONDS
 from database import (
     add_user, is_banned, get_admins, admin_filter, get_force_channels,
@@ -12,11 +13,19 @@ from database import (
     search_content, save_message_map, get_mapped_user
 )
 from ai import ask_gemini
+from Plugins.indexer import LINK_ONLY_REGEX
 
 # Constants
 SENT_CONFIRM_DELETE_AFTER = 3  # seconds before "Message sent!" auto-deletes
 FSUB_OK_TTL = 60               # seconds a "fully subscribed" result is cached per user
 AI_FOOTER = "\n\n🤖 AI reply • your message was also forwarded to the admin."
+REACT_OK = "👍"      # shown on the admin's reply once it reached the user
+REACT_FAIL = "🥴"    # shown on the admin's reply when it could not be delivered
+REPLY_HINT = "⚠️ <i>Reply to a forwarded message to send a message to that user.</i>"
+NOT_SENT_TEXT = "❌ Message <b>not</b> sent!\n<i>The user blocked the bot or deleted the account.</i>"
+# Admin commands: never copied to a user when sent as a reply, never answered with the reply hint.
+ADMIN_COMMANDS = ["start", "settings", "menu", "restart", "clearindex",
+                  "setemoji", "emojion", "emojioff", "emojibtn", "emojipack", "delemoji", "emoji", "emojilist"]
 FSUB_TEXT = "<blockquote><b><i>Please join our channel(s) first to use this bot.</i></b></blockquote>"
 
 # RAM caches / state
@@ -181,25 +190,72 @@ def _cooldown_ok(user_id: int) -> bool:
     return True
 
 
-def _first_in_group(message: Message) -> bool:
+def _group_once(kind: str, message: Message) -> bool:
+    """True for a normal message and for the FIRST item of an album (per `kind`), so an album of 10
+    photos produces one confirmation / one info message / one hint, not ten."""
     gid = message.media_group_id
     if not gid:
         return True
-    if gid in _confirmed_groups:
+    key = (kind, gid)
+    if key in _confirmed_groups:
         return False
-    _confirmed_groups[gid] = time.monotonic()
+    _confirmed_groups[key] = time.monotonic()
     if len(_confirmed_groups) > 500:
         now = time.monotonic()
-        for g in [g for g, t in _confirmed_groups.items() if now - t > 120]:
-            del _confirmed_groups[g]
+        for k in [k for k, t in _confirmed_groups.items() if now - t > 120]:
+            del _confirmed_groups[k]
     return True
 
 
+def _first_in_group(message: Message) -> bool:
+    return _group_once("confirm", message)
+
+
+async def _react(client: Client, message: Message, emoji: str):
+    """Reaction on a message (never breaks the flow if Telegram refuses it)."""
+    try:
+        await client.send_reaction(chat_id=message.chat.id, message_id=message.id, emoji=emoji)
+    except Exception as e:
+        print(f"[react] couldn't react with {emoji}: {e}")
+
+
+def _user_info(user) -> tuple:
+    """Admin-side info message under every forwarded user message: who sent it + a profile button."""
+    name = " ".join(x for x in (user.first_name, getattr(user, "last_name", None)) if x) or "User"
+    text = (
+        f'👆 Message sent by <a href="tg://user?id={user.id}">{html.escape(name)}</a> '
+        f'[<code>{user.id}</code>] #id{user.id}\n'
+        f'👉 <i>To answer, reply to this message.</i>'
+    )
+    markup = InlineKeyboardMarkup([[InlineKeyboardButton("👤 User profile", url=f"tg://user?id={user.id}")]])
+    return text, markup
+
+
+async def _forward_exact(client: Client, to_chat_id: int, from_chat_id, message_id: int, reply_to_id: int = None):
+    """Server-side copy WITHOUT the "Forwarded from" header. Telegram copies the post as it is: media, captions,
+    custom link preview, premium emoji, buttons — identical to the channel post."""
+    extra = {}
+    if reply_to_id:
+        extra["reply_to"] = raw.types.InputReplyToMessage(reply_to_msg_id=reply_to_id)
+    await client.invoke(raw.functions.messages.ForwardMessages(
+        from_peer=await client.resolve_peer(from_chat_id),
+        to_peer=await client.resolve_peer(to_chat_id),
+        id=[message_id],
+        random_id=[int.from_bytes(os.urandom(8), "big", signed=True)],
+        drop_author=True,
+        **extra
+    ))
+
+
 async def _send_indexed(client: Client, message: Message, match: dict) -> bool:
-    """Sends an indexed post back to the user. Returns False if it couldn't be sent."""
+    """Sends an indexed post back to the user exactly as it is in the channel. Returns False if it couldn't be sent."""
+    try:
+        await _forward_exact(client, message.chat.id, match["chat_id"], match["message_id"], reply_to_id=message.id)
+        return True
+    except Exception as e:
+        print(f"[index] exact copy failed ({e}); falling back to a re-send")  # e.g. channel has "restrict saving content"
     try:
         if match.get("has_media"):
-            # No caption override: keeps the original caption with its formatting and links.
             await client.copy_message(message.chat.id, match["chat_id"], match["message_id"])
         else:
             text = match.get("html") or match.get("text") or ""
@@ -251,16 +307,29 @@ async def forward_to_admin(client: Client, message: Message):
     admin_ids.add(ADMIN)
 
     sent_to_any = False
+    send_info = _group_once("info", message)
+    info_text, info_markup = _user_info(message.from_user)
     for admin_id in admin_ids:
         try:
             fwd = await message.forward(admin_id)
         except Exception:
             continue
         sent_to_any = True
-        try:
-            await save_message_map(admin_id, fwd.id, user_id)
-        except Exception as e:
-            print(f"[map] couldn't save reply mapping: {e}")
+        mapped_ids = [fwd.id]
+        if send_info:
+            try:
+                info = await client.send_message(
+                    admin_id, info_text, reply_to_message_id=fwd.id,
+                    reply_markup=info_markup, parse_mode=enums.ParseMode.HTML
+                )
+                mapped_ids.append(info.id)
+            except Exception as e:
+                print(f"[info] couldn't send user info to {admin_id}: {e}")
+        for mid in mapped_ids:  # the admin can reply to the forwarded message OR the info message
+            try:
+                await save_message_map(admin_id, mid, user_id)
+            except Exception as e:
+                print(f"[map] couldn't save reply mapping: {e}")
 
     if not sent_to_any:
         now = time.monotonic()
@@ -311,24 +380,37 @@ async def _delete_after_delay(msg: Message):
         pass
 
 
-# Admin commands are excluded so e.g. "/settings" sent as a reply isn't copied to the user.
-@Client.on_message(
-    filters.private & admin_filter & filters.reply
-    & ~filters.command(["start", "settings", "menu", "restart", "clearindex", "setemoji", "emojion", "emojioff", "emojibtn", "emojipack", "delemoji", "emoji", "emojilist"])
-)
+@Client.on_message(filters.private & admin_filter & filters.reply & ~filters.command(ADMIN_COMMANDS))
 async def reply_to_user(client: Client, message: Message):
     replied_msg = message.reply_to_message
-    if not replied_msg:
-        return await message.reply("❌ **User ID not detected.**")
-    user_id = await get_mapped_user(message.chat.id, replied_msg.id)
-    if not user_id and replied_msg.forward_from:
-        user_id = replied_msg.forward_from.id
+    user_id = None
+    if replied_msg:
+        user_id = await get_mapped_user(message.chat.id, replied_msg.id)
+        if not user_id and replied_msg.forward_from:
+            user_id = replied_msg.forward_from.id
     if not user_id:
-        return await message.reply("❌ **User ID not detected.**")
+        return await message.reply(REPLY_HINT, parse_mode=enums.ParseMode.HTML)
     try:
         await message.copy(user_id)
+    except (UserIsBlocked, InputUserDeactivated):
+        await _react(client, message, REACT_FAIL)
+        return await message.reply(NOT_SENT_TEXT, parse_mode=enums.ParseMode.HTML)
     except Exception as e:
-        await message.reply(f"⚠️ **Error sending to user:**\n`{e}`")
+        await _react(client, message, REACT_FAIL)
+        return await message.reply(
+            f"⚠️ <b>Error sending to user:</b>\n<code>{html.escape(str(e))}</code>", parse_mode=enums.ParseMode.HTML
+        )
+    await _react(client, message, REACT_OK)
+
+
+# An admin message that is not a reply (and not a command / channel forward / post link) reaches nobody.
+@Client.on_message(
+    filters.private & admin_filter & ~filters.reply & ~filters.command(ADMIN_COMMANDS)
+    & ~filters.forwarded & ~filters.regex(LINK_ONLY_REGEX)
+)
+async def admin_needs_reply(client: Client, message: Message):
+    if _group_once("hint", message):
+        await message.reply(REPLY_HINT, parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_callback_query(filters.regex("^check_fsub$"))

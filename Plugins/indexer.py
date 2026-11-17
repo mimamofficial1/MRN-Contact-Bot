@@ -51,8 +51,16 @@ def _extract_html(message: Message) -> str:
     return ""
 
 
+# Link-preview "media" is not a real attachment. The enum name differs between libraries
+# (kurigram: WEB_PAGE, pyrofork: WEB_PAGE_PREVIEW), so accept whichever exists.
+_WEB_PAGE_TYPES = tuple(
+    getattr(enums.MessageMediaType, n) for n in ("WEB_PAGE", "WEB_PAGE_PREVIEW")
+    if hasattr(enums.MessageMediaType, n)
+)
+
+
 def _has_media(message: Message) -> bool:
-    return bool(message.media) and message.media != enums.MessageMediaType.WEB_PAGE
+    return bool(message.media) and message.media not in _WEB_PAGE_TYPES
 
 
 def _resolve_target(message: Message):

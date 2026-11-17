@@ -37,9 +37,12 @@ import logging
 import os
 import re
 import time
+from io import BytesIO
 
 from pyrogram import Client, enums, filters, raw
 from pyrogram.errors import FloodWait, RPCError
+from pyrogram.raw.core import TLObject
+from pyrogram.raw.core.primitives import Bytes, Int, Long, String, Vector
 from pyrogram.types import Message
 from pyrogram.utils import get_channel_id
 
@@ -554,6 +557,27 @@ def _report_text():
     return "\n".join(lines)
 
 
+async def _notify_admin(client):
+    """If something is missing, tell the first admin ONCE (at most once an hour) - so nobody has to dig
+    through logs. Silent when everything is covered."""
+    r = _state.get("report")
+    if not r or not (r["missing"] or r["failed"] or r["invalid"]):
+        return
+    try:
+        from config import ADMIN as admin
+        st = await get_settings()
+        if time.time() - float(st.get("premium_emoji_report_ts") or 0) < 3600:
+            return
+        await update_setting("premium_emoji_report_ts", time.time())
+        await client.send_message(
+            admin,
+            "<b>✅ Premium emoji status</b>\n\n" + _report_text() +
+            f"\n\n<b>Text:</b> {'ON' if _state['on'] else 'OFF'} · <b>Buttons:</b> {'ON' if _state['btn_on'] else 'OFF'}",
+        )
+    except Exception as e:
+        logger.info(f"[premium_emoji] status message not sent: {type(e).__name__}")
+
+
 def start_premium(client):
     """Called by bot.py once the bot is connected: loads packs + learns your style in the background.
     (No message is sent to anybody - see /emoji for the status.)"""
@@ -564,6 +588,11 @@ async def _startup(client):
     try:
         await _load_state()
         await _autoload_packs(client)
+        # Same admin status message as the file-store bot, but OFF by default so a restart stays quiet
+        # (the contact bot should say only "online"). Set env PREMIUM_EMOJI_NOTIFY=1 to turn it on.
+        if os.environ.get("PREMIUM_EMOJI_NOTIFY", "").strip() in ("1", "true", "yes"):
+            await asyncio.sleep(25)              # let _backfill_then_report finish first
+            await _notify_admin(client)
     except Exception:
         logger.error("[premium_emoji] startup failed", exc_info=True)
 
@@ -605,6 +634,117 @@ def _inject(text, entities):
 # --------------------------------------------------------------------------- buttons
 # kurigram (layer 233) already writes inline keyboards in the new format (KeyboardInlineButton with an
 # optional KeyboardButtonStyle that carries the premium icon), so the native classes are used directly.
+# pyrofork 2.3.69 (layer 220) predates that format: there the ORIGINAL hand-written classes below are used.
+# The right path is picked automatically (_NATIVE_BUTTONS), so the same file works on both libraries.
+_NATIVE_BUTTONS = hasattr(raw.types, "KeyboardInlineButton")
+
+# Telegram's newest TL layer describes inline buttons in a NEW format that carries a "style"
+# with the premium icon. pyrofork 2.3.69 (layer 220) predates it, so the few classes needed to
+# WRITE such a keyboard are defined here. Layouts and ids are copied from the layer-229 schema
+# and verified byte-for-byte against kurigram's generated classes. They are only ever written,
+# never read: Telegram still answers in the old format because the session declares layer 220.
+class _BtnStyle(TLObject):
+    __slots__ = ["icon"]
+    ID = 0x4FDD3430
+    QUALNAME = "types.KeyboardButtonStyle"
+
+    def __init__(self, *, icon=None):
+        self.icon = icon
+
+    def write(self, *args) -> bytes:
+        b = BytesIO()
+        b.write(Int(self.ID, False))
+        b.write(Int((1 << 3) if self.icon is not None else 0))      # flags: icon
+        if self.icon is not None:
+            b.write(Long(self.icon))
+        return b.getvalue()
+
+
+class _BtnTypeUrl(TLObject):
+    __slots__ = ["url"]
+    ID = 0xECA4F8D4
+    QUALNAME = "types.InlineButtonTypeUrl"
+
+    def __init__(self, *, url):
+        self.url = url
+
+    def write(self, *args) -> bytes:
+        b = BytesIO()
+        b.write(Int(self.ID, False))
+        b.write(String(self.url))
+        return b.getvalue()
+
+
+class _BtnTypeCallback(TLObject):
+    __slots__ = ["data", "requires_password"]
+    ID = 0x2955BC38
+    QUALNAME = "types.InlineButtonTypeCallback"
+
+    def __init__(self, *, data, requires_password=None):
+        self.data = data
+        self.requires_password = requires_password
+
+    def write(self, *args) -> bytes:
+        b = BytesIO()
+        b.write(Int(self.ID, False))
+        b.write(Int((1 << 0) if self.requires_password else 0))     # flags: requires_password
+        b.write(Bytes(self.data))
+        return b.getvalue()
+
+
+class _Btn(TLObject):
+    __slots__ = ["text", "type", "style"]
+    ID = 0x11C1A322
+    QUALNAME = "types.KeyboardInlineButton"
+
+    def __init__(self, *, text, type, style=None):
+        self.text = text
+        self.type = type
+        self.style = style
+
+    def write(self, *args) -> bytes:
+        b = BytesIO()
+        b.write(Int(self.ID, False))
+        b.write(Int((1 << 10) if self.style is not None else 0))    # flags: style
+        if self.style is not None:
+            b.write(self.style.write())
+        b.write(String(self.text))
+        b.write(self.type.write())
+        return b.getvalue()
+
+
+class _BtnRow(TLObject):
+    __slots__ = ["buttons"]
+    ID = 0x19420AF6
+    QUALNAME = "types.KeyboardInlineButtonRow"
+
+    def __init__(self, *, buttons):
+        self.buttons = buttons
+
+    def write(self, *args) -> bytes:
+        b = BytesIO()
+        b.write(Int(self.ID, False))
+        b.write(Vector(self.buttons))
+        return b.getvalue()
+
+
+class _BtnMarkup(TLObject):
+    __slots__ = ["rows", "force_reply"]
+    ID = 0xB2B15770
+    QUALNAME = "types.ReplyInlineMarkup"
+
+    def __init__(self, *, rows, force_reply=None):
+        self.rows = rows
+        self.force_reply = force_reply
+
+    def write(self, *args) -> bytes:
+        b = BytesIO()
+        b.write(Int(self.ID, False))
+        b.write(Int((1 << 5) if self.force_reply else 0))           # flags: force_reply
+        b.write(Vector(self.rows))
+        return b.getvalue()
+
+
 def _split_icon(label: str):
     """'🚀 FAST DOWNLOAD 🚀' -> ('FAST DOWNLOAD', icon_id) using the first mapped emoji."""
     rx = _state["rx"]
@@ -621,7 +761,7 @@ def _split_icon(label: str):
     return label, None
 
 
-def _style_markup(markup):
+def _native_style_markup(markup):
     """Inline keyboard -> the same keyboard with premium icons, or None if there is nothing to change
     (or the keyboard holds something we do not convert - then it is sent untouched)."""
     if type(markup) is not raw.types.ReplyInlineMarkup:
@@ -645,6 +785,46 @@ def _style_markup(markup):
     if not any_icon:
         return None
     return raw.types.ReplyInlineMarkup(rows=rows, force_reply=getattr(markup, "force_reply", None))
+
+
+def _legacy_style_markup(markup):
+    """Old-format inline keyboard -> new format with premium icons, or None if there is nothing to
+    change / the keyboard holds a button kind we do not convert (then it is sent untouched)."""
+    if type(markup) is not raw.types.ReplyInlineMarkup:
+        return None
+    rows, any_icon = [], False
+    for row in markup.rows:
+        buttons = []
+        for btn in row.buttons:
+            kind = type(btn)
+            if kind is raw.types.KeyboardButtonUrl:
+                typ = _BtnTypeUrl(url=btn.url)
+            elif kind is raw.types.KeyboardButtonCallback:
+                typ = _BtnTypeCallback(data=btn.data, requires_password=getattr(btn, "requires_password", None))
+            else:
+                return None
+            text, icon = _split_icon(btn.text)
+            any_icon = any_icon or icon is not None
+            buttons.append(_Btn(text=text, type=typ, style=_BtnStyle(icon=icon) if icon is not None else None))
+        rows.append(_BtnRow(buttons=buttons))
+    if not any_icon:
+        return None
+    return _BtnMarkup(rows=rows, force_reply=getattr(markup, "force_reply", None))
+
+
+def _style_markup(markup):
+    return _native_style_markup(markup) if _NATIVE_BUTTONS else _legacy_style_markup(markup)
+
+
+def _test_markup(doc_id):
+    """One test button with a premium icon, in whichever format this library uses."""
+    if _NATIVE_BUTTONS:
+        return raw.types.ReplyInlineMarkup(rows=[raw.types.KeyboardInlineButtonRow(buttons=[raw.types.KeyboardInlineButton(
+            text="Button test", type=raw.types.InlineButtonTypeCallback(data=b"premium_btn_test"),
+            style=raw.types.KeyboardButtonStyle(icon=doc_id))])])
+    return _BtnMarkup(rows=[_BtnRow(buttons=[_Btn(
+        text="Button test", type=_BtnTypeCallback(data=b"premium_btn_test"), style=_BtnStyle(icon=doc_id),
+    )])])
 
 
 # --------------------------------------------------------------------------- the hook
@@ -947,10 +1127,7 @@ async def emoji_btn_cmd(client, message: Message):
     if not _state["map"]:
         return await message.reply_text("<b>Pehle <code>/setemoji</code> se kuch premium emoji set karo.</b>")
     ch, doc_id = next(iter(_state["map"].items()))
-    markup = raw.types.ReplyInlineMarkup(rows=[raw.types.KeyboardInlineButtonRow(buttons=[raw.types.KeyboardInlineButton(
-        text="Button test", type=raw.types.InlineButtonTypeCallback(data=b"premium_btn_test"),
-        style=raw.types.KeyboardButtonStyle(icon=doc_id),
-    )])])
+    markup = _test_markup(doc_id)
     try:
         await client.invoke(
             raw.functions.messages.SendMessage(
