@@ -30,7 +30,17 @@ start - check I'm alive
 settings - open the bot settings panel (admin only)
 restart - restart bot (admin only)
 clearindex - delete all indexed channel content (admin only)
+emoji - premium emoji status (admin only)
 ```
+
+### Premium emoji (optional)
+
+`Plugins/premium_emoji.py` turns normal emoji in the bot's messages into animated **premium emoji** and shows
+premium icons on inline buttons. It needs **no setup**: it loads Telegram's animated emoji packs and learns your
+own style from channel posts / messages you send to the bot. Requirement: the account that created the bot in
+@BotFather must have **Telegram Premium** (if not, messages are simply sent with normal emoji).
+Admin commands: `/emoji` (status), `/setemoji` (+ premium emoji), `/emojipack <t.me/addemoji/...>`,
+`/delemoji`, `/emojion`, `/emojioff`, `/emojibtn on|off`.
 
 ### Channel content index (admin only)
 

@@ -53,6 +53,13 @@ class Bot(Client):
         me = await self.get_me()
         print(f"Bot Started as {me.first_name}")
 
+        # Premium emoji: loads emoji packs + learns your style in the background (sends no messages).
+        try:
+            from Plugins.premium_emoji import start_premium
+            start_premium(self)
+        except Exception as e:
+            print(f"Premium emoji not started: {e}")
+
         # One message per start; skipped if one went out in the last 30s (crash-loop protection).
         if ADMIN:
             try:

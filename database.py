@@ -234,6 +234,15 @@ async def add_chat_turns(user_id: int, user_text: str, model_text: str):
     )
 
 
+# ---------------- Generic key/value bot settings (used by Plugins/premium_emoji.py) ----------------
+
+async def get_settings() -> dict:
+    return await settings_col.find_one({"_id": "bot_settings"}) or {}
+
+async def update_setting(key: str, value):
+    await settings_col.update_one({"_id": "bot_settings"}, {"$set": {key: value}}, upsert=True)
+
+
 # ---------------- Startup notice throttle ----------------
 
 async def should_send_startup_notice(window: int = 30) -> bool:
