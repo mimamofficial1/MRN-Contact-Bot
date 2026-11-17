@@ -26,7 +26,8 @@ bc_draft = {}
 
 
 # Commands that must always work, even while the admin is in the middle of a settings prompt.
-PASS_THROUGH_COMMANDS = {"settings", "menu", "start", "restart", "clearindex"}
+PASS_THROUGH_COMMANDS = {"settings", "menu", "start", "restart", "clearindex",
+                         "setemoji", "emojion", "emojioff", "emojibtn", "emojipack", "delemoji", "emoji", "emojilist"}
 
 
 def short_id(value: str) -> str:

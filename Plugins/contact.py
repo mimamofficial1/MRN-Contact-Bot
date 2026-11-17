@@ -314,7 +314,7 @@ async def _delete_after_delay(msg: Message):
 # Admin commands are excluded so e.g. "/settings" sent as a reply isn't copied to the user.
 @Client.on_message(
     filters.private & admin_filter & filters.reply
-    & ~filters.command(["start", "settings", "menu", "restart", "clearindex"])
+    & ~filters.command(["start", "settings", "menu", "restart", "clearindex", "setemoji", "emojion", "emojioff", "emojibtn", "emojipack", "delemoji", "emoji", "emojilist"])
 )
 async def reply_to_user(client: Client, message: Message):
     replied_msg = message.reply_to_message
