@@ -1,7 +1,7 @@
 # Telegram Contact Bot
 
 <p align="center">
-  <img src="https://i.ibb.co/mrbPnPR7/uploaded-image.jpg" alt="MRN-FILE-STORE-BOT Logo">
+  <img src="https://i.ibb.co/pBHyMP4d/photo-AQADrx-Fr-G4-EAAe-FXfg.jpg" alt="MRN-CONTACT-BOT Logo">
 </p>
 
 <b>Chat With Owner Directly Through This Bot.</b>
