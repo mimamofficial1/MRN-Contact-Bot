@@ -1,6 +1,7 @@
 import asyncio
 import html
 import time
+from collections import deque
 from pyrogram import Client, filters, enums
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant
@@ -24,6 +25,11 @@ _fsub_warned = set()     # chats we already warned the owner about
 _chat_info = {}          # {stored_chat: (title, join_url)}
 _last_bot_reply = {}     # {user_id: monotonic ts} cooldown for AI / indexed-content replies
 _confirmed_groups = {}   # {media_group_id: ts} so an album gets one "Message sent!" only
+_flood = {}              # {user_id: deque of timestamps} per-user flood guard
+_error_notice_at = {}    # {user_id: ts} throttles the "could not be sent" reply
+
+FLOOD_MAX = 15           # more than this many messages ...
+FLOOD_WINDOW = 10        # ... within this many seconds => ignored (stops runaway loops)
 
 
 # ---------------- Force join ----------------
@@ -145,6 +151,24 @@ async def fsub_gate(client: Client, message: Message) -> bool:
 
 # ---------------- Helpers ----------------
 
+def flood_ok(user_id: int) -> bool:
+    """Loop breaker: a real person never sends 15+ messages in 10s, a feedback loop always does."""
+    now = time.monotonic()
+    q = _flood.setdefault(user_id, deque())
+    while q and now - q[0] > FLOOD_WINDOW:
+        q.popleft()
+    if len(q) >= FLOOD_MAX:
+        if len(q) == FLOOD_MAX:  # log once per burst
+            print(f"[flood] ignoring user {user_id}: more than {FLOOD_MAX} messages in {FLOOD_WINDOW}s")
+            q.append(now)
+        return False
+    q.append(now)
+    if len(_flood) > 5000:
+        for uid in [u for u, d in _flood.items() if not d or now - d[-1] > FLOOD_WINDOW]:
+            del _flood[uid]
+    return True
+
+
 def _cooldown_ok(user_id: int) -> bool:
     """Rate-limits bot-generated replies (AI / indexed content). Forwarding to admin is never limited."""
     now = time.monotonic()
@@ -193,9 +217,23 @@ async def _send_indexed(client: Client, message: Message, match: dict) -> bool:
 
 @Client.on_message(filters.private & ~admin_filter & ~filters.command("start"))
 async def forward_to_admin(client: Client, message: Message):
+    if not message.from_user:
+        return
     user_id = message.from_user.id
 
+    # Never process the bot's own messages (or other bots'), nor the bot's own messages bounced back
+    # as forwards — that is how a forward loop feeds itself.
+    me = getattr(client, "me", None)
+    if message.from_user.is_bot or (me and user_id == me.id):
+        return
+    fwd_from = getattr(message, "forward_from", None)
+    if me and fwd_from and fwd_from.id == me.id:
+        return
+
     if await is_banned(user_id):
+        return
+
+    if not flood_ok(user_id):
         return
 
     if await fsub_gate(client, message):
@@ -225,7 +263,11 @@ async def forward_to_admin(client: Client, message: Message):
             print(f"[map] couldn't save reply mapping: {e}")
 
     if not sent_to_any:
-        return await message.reply("❌ **Error:** Message could not be sent.")
+        now = time.monotonic()
+        if now - _error_notice_at.get(user_id, -1e9) > 30:  # don't spam the error itself
+            _error_notice_at[user_id] = now
+            await message.reply("❌ **Error:** Message could not be sent.")
+        return
 
     # Bot-generated replies (indexed content, then AI) — plain text only, and rate-limited
     # per user. The admin has already received the forward above either way.

@@ -4,7 +4,7 @@ import asyncio
 from pyrogram import Client, filters
 from pyrogram.types import Message
 from database import admin_filter, add_user, is_banned
-from Plugins.contact import fsub_gate, send_start_message
+from Plugins.contact import fsub_gate, send_start_message, flood_ok
 
 @Client.on_message(filters.command("start") & filters.private)
 async def start_cmd(client: Client, message: Message):
@@ -12,6 +12,9 @@ async def start_cmd(client: Client, message: Message):
     mention_user = message.from_user.mention
 
     if await is_banned(user_id):
+        return
+
+    if message.from_user.is_bot or not flood_ok(user_id):
         return
 
     if await fsub_gate(client, message):
