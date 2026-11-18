@@ -34,3 +34,6 @@ AI_EXTRA_PROMPT = os.environ.get("AI_EXTRA_PROMPT", "")
 # Minimum seconds between two bot-generated (AI / indexed-content) replies to
 # the same user. Messages are still forwarded to the admin during cooldown.
 COOLDOWN_SECONDS = int(os.environ.get("COOLDOWN_SECONDS", "5"))
+# Longest a user may wait for the AI (seconds, including retries). After that the normal
+# "Message sent!" confirmation is used.
+AI_TIMEOUT = int(os.environ.get("AI_TIMEOUT", "20"))
