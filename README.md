@@ -35,6 +35,7 @@ settings - open the bot settings panel (admin only)
 restart - restart bot (admin only)
 clearindex - delete all indexed channel content (admin only)
 emoji - premium emoji status (admin only)
+aitest - check that the AI works, shows the exact error if not (admin only)
 ```
 
 ### Premium emoji (optional)
@@ -46,6 +47,12 @@ Requirement: the account that created the bot in
 @BotFather must have **Telegram Premium** (if not, messages are simply sent with normal emoji).
 Admin commands: `/emoji` (status), `/setemoji` (+ premium emoji), `/emojipack <t.me/addemoji/...>`,
 `/delemoji`, `/emojion`, `/emojioff`, `/emojibtn on|off`.
+
+### AI not replying?
+
+Send `/aitest` to the bot. It tells you whether `GEMINI_API_KEY` is set and, if the AI fails, the exact reason
+(invalid key, quota exceeded, model not found, timeout...). The bot also prints `[ai] ...` lines in the logs.
+Users always get "✅ Message sent!" within about 2 seconds; the AI answer follows when it is ready.
 
 ### How messages reach you (admin)
 
@@ -78,6 +85,7 @@ admins, banned users, statistics) is done through the `/settings` button menu.
 * `GEMINI_API_KEY` Google Gemini API key (optional — leave empty to disable AI replies)
 * `GEMINI_MODEL` Gemini model name (optional, defaults to `gemini-3.6-flash`)
 * `AI_EXTRA_PROMPT` Extra instructions for the AI, e.g. what your channel is about (optional)
+* `AI_TIMEOUT` Longest a user waits for the AI, in seconds (optional, defaults to `20`)
 * `COOLDOWN_SECONDS` Minimum seconds between two bot-generated replies to the same user (optional, defaults to `5`)
 
 The bot stops at startup with a clear message if a required variable is missing.
