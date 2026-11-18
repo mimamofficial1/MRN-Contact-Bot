@@ -3,7 +3,7 @@ from pyrogram import Client
 from aiohttp import web
 from config import API_ID, API_HASH, BOT_TOKEN, ADMIN
 from database import ensure_indexes, should_send_startup_notice
-from ai import close_session
+from ai import close_session, is_enabled, GEMINI_MODEL
 
 STARTUP_TEXT = "✨ ᴍʀɴ ᴄᴏɴᴛᴀᴄᴛ ʙᴏᴛ ɪs ɴᴏᴡ ᴏɴʟɪɴᴇ !"
 
@@ -52,6 +52,9 @@ class Bot(Client):
 
         me = await self.get_me()
         print(f"Bot Started as {me.first_name}")
+
+        print(f"[ai] AI replies ENABLED (model {GEMINI_MODEL})" if is_enabled()
+              else "[ai] AI replies are OFF: GEMINI_API_KEY is not set")
 
         # Premium emoji: loads emoji packs + learns your style in the background (sends no messages).
         try:
