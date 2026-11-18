@@ -12,11 +12,12 @@ from database import (
     find_auto_reply, get_start_message, get_chat_history, add_chat_turns,
     search_content, save_message_map, get_mapped_user, remove_content_item
 )
-from ai import ask_gemini
+from ai import ask_gemini, is_enabled, status as ai_status
 from Plugins.indexer import LINK_ONLY_REGEX
 
 # Constants
 SENT_CONFIRM_DELETE_AFTER = 3  # seconds before "Message sent!" auto-deletes
+CONFIRM_AFTER = 1.5            # if the AI/index answer isn't ready by then, "Message sent!" is shown at once
 FSUB_OK_TTL = 60               # seconds a "fully subscribed" result is cached per user
 AI_FOOTER = "\n\n🤖 AI reply • your message was also forwarded to the admin."
 REACT_OK = "👍"      # shown on the admin's reply once it reached the user
@@ -25,7 +26,7 @@ REPLY_HINT = "⚠️ <i>Reply to a forwarded message to send a message to that u
 NOT_SENT_TEXT = "❌ Message <b>not</b> sent!\n<i>The user blocked the bot or deleted the account.</i>"
 # Admin commands: never copied to a user when sent as a reply, never answered with the reply hint.
 ADMIN_COMMANDS = ["start", "settings", "menu", "restart", "clearindex",
-                  "setemoji", "emojion", "emojioff", "emojibtn", "emojipack", "delemoji", "emoji", "emojilist"]
+                  "setemoji", "emojion", "emojioff", "emojibtn", "emojipack", "delemoji", "emoji", "emojilist", "aitest"]
 FSUB_TEXT = "<blockquote><b><i>Please join our channel(s) first to use this bot.</i></b></blockquote>"
 
 # RAM caches / state
@@ -338,6 +339,124 @@ async def _send_indexed(client: Client, message: Message, match: dict) -> bool:
 
 # ---------------- Main flow ----------------
 
+_bg_tasks = set()
+
+
+def _spawn(coro) -> "asyncio.Task":
+    """Background task that is kept referenced until it finishes (so it can't be garbage-collected mid-way)."""
+    task = asyncio.create_task(coro)
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+async def _none():
+    return None
+
+
+async def _safe_add_user(user):
+    try:
+        await add_user(user.id, user.first_name or "", user.username or "")
+    except Exception as e:
+        print(f"[db] couldn't save user {user.id}: {e}")
+
+
+async def _typing(client: Client, chat_id: int):
+    try:
+        await client.send_chat_action(chat_id, enums.ChatAction.TYPING)
+    except Exception:
+        pass
+
+
+async def _deliver_to_admin(client: Client, admin_id: int, message: Message, user_id: int,
+                            info_text: str, info_markup, send_info: bool) -> bool:
+    """Forward the user's message to one admin, followed by the info message. All admins run in parallel."""
+    try:
+        fwd = await message.forward(admin_id)
+    except Exception:
+        return False
+    mapped_ids = [fwd.id]
+    if send_info:
+        try:
+            info = await client.send_message(
+                admin_id, info_text, reply_to_message_id=fwd.id,
+                reply_markup=info_markup, parse_mode=enums.ParseMode.HTML
+            )
+            mapped_ids.append(info.id)
+        except Exception as e:
+            print(f"[info] couldn't send user info to {admin_id}: {e}")
+
+    async def save(mid):  # the admin can reply to the forwarded message OR the info message
+        try:
+            await save_message_map(admin_id, mid, user_id)
+        except Exception as e:
+            print(f"[map] couldn't save reply mapping: {e}")
+    await asyncio.gather(*(save(mid) for mid in mapped_ids))
+    return True
+
+
+async def _ai_answer(client: Client, message: Message, user_id: int):
+    _spawn(_typing(client, message.chat.id))  # "typing..." while the AI thinks
+    history = await get_chat_history(user_id)
+    return await ask_gemini(history, message.text)
+
+
+async def _prepare_reply(client: Client, message: Message, user_id: int):
+    """Runs WHILE the message is being forwarded to the admins: first an indexed channel post
+    (see Plugins/indexer.py), otherwise the AI answer. Returns ("index", doc) / ("ai", text) / None."""
+    try:
+        matches = await search_content(message.text, limit=1)
+    except Exception as e:
+        print(f"[index] search failed: {e}")
+        matches = []
+    if matches:
+        return ("index", matches[0])
+    if not is_enabled():
+        return None
+    ai_reply = await _ai_answer(client, message, user_id)
+    return ("ai", ai_reply) if ai_reply else None
+
+
+async def _send_ai_reply(message: Message, user_id: int, ai_reply: str) -> bool:
+    try:
+        # Parse mode off: model output often contains stray *, _ or < that break Telegram parsing.
+        await message.reply(ai_reply[:3800] + AI_FOOTER, parse_mode=enums.ParseMode.DISABLED)
+    except Exception as e:
+        print(f"[ai] couldn't send AI reply: {e}")
+        return False
+    try:
+        await add_chat_turns(user_id, message.text, ai_reply)
+    except Exception as e:  # the user already got the answer; only the AI's memory of it is lost
+        print(f"[ai] couldn't save chat history: {e}")
+    return True
+
+
+async def _deliver_reply(client: Client, message: Message, user_id: int, reply) -> bool:
+    kind, payload = reply
+    if kind == "index":
+        if await _send_indexed(client, message, payload):
+            return True
+        if not is_enabled():
+            return False
+        payload = await _ai_answer(client, message, user_id)  # the post couldn't be sent -> let the AI answer
+        if not payload:
+            return False
+    return await _send_ai_reply(message, user_id, payload)
+
+
+async def _confirm(message: Message) -> bool:
+    """The short auto-deleting "Message sent!" notice (once per album)."""
+    if not _first_in_group(message):
+        return False
+    try:
+        sent_msg = await message.reply("✅ <i>Message sent!</i>", parse_mode=enums.ParseMode.HTML)
+    except Exception as e:
+        print(f"[confirm] couldn't send confirmation: {e}")
+        return False
+    asyncio.create_task(_delete_after_delay(sent_msg))
+    return True
+
+
 @Client.on_message(filters.private & ~admin_filter & ~filters.command("start"))
 async def forward_to_admin(client: Client, message: Message):
     if not message.from_user:
@@ -353,90 +472,65 @@ async def forward_to_admin(client: Client, message: Message):
     if me and fwd_from and fwd_from.id == me.id:
         return
 
-    if await is_banned(user_id):
+    if not flood_ok(user_id):  # no database work at all for a flood
         return
 
-    if not flood_ok(user_id):
+    if await is_banned(user_id):
         return
 
     if await fsub_gate(client, message):
         return
 
-    await add_user(user_id, message.from_user.first_name or "", message.from_user.username or "")
+    _spawn(_safe_add_user(message.from_user))  # not needed for the answer -> don't make the user wait for it
 
-    # Automatic keyword reply — replaces forwarding when a keyword matches.
-    if message.text:
-        auto_reply = await find_auto_reply(message.text)
-        if auto_reply:
-            return await message.reply(auto_reply, parse_mode=enums.ParseMode.HTML)
+    # Keyword auto-reply (replaces forwarding when it matches) and the admin list are independent lookups.
+    auto_reply, admin_list = await asyncio.gather(
+        find_auto_reply(message.text) if message.text else _none(), get_admins()
+    )
+    if auto_reply:
+        return await message.reply(auto_reply, parse_mode=enums.ParseMode.HTML)
 
-    admin_ids = set(await get_admins())
+    admin_ids = set(admin_list)
     admin_ids.add(ADMIN)
 
-    sent_to_any = False
+    # Bot-generated replies (indexed post, then AI) are prepared in the background while the message is
+    # forwarded — text only, rate-limited per user. The admins get the forward either way.
+    prep = _spawn(_prepare_reply(client, message, user_id)) if (message.text and _cooldown_ok(user_id)) else None
+
     send_info = _group_once("info", message)
     info_text, info_markup = _user_info(message.from_user)
-    for admin_id in admin_ids:
-        try:
-            fwd = await message.forward(admin_id)
-        except Exception:
-            continue
-        sent_to_any = True
-        mapped_ids = [fwd.id]
-        if send_info:
-            try:
-                info = await client.send_message(
-                    admin_id, info_text, reply_to_message_id=fwd.id,
-                    reply_markup=info_markup, parse_mode=enums.ParseMode.HTML
-                )
-                mapped_ids.append(info.id)
-            except Exception as e:
-                print(f"[info] couldn't send user info to {admin_id}: {e}")
-        for mid in mapped_ids:  # the admin can reply to the forwarded message OR the info message
-            try:
-                await save_message_map(admin_id, mid, user_id)
-            except Exception as e:
-                print(f"[map] couldn't save reply mapping: {e}")
+    results = await asyncio.gather(*(
+        _deliver_to_admin(client, admin_id, message, user_id, info_text, info_markup, send_info)
+        for admin_id in admin_ids
+    ))
 
-    if not sent_to_any:
+    if not any(results):
+        if prep:
+            prep.cancel()
         now = time.monotonic()
         if now - _error_notice_at.get(user_id, -1e9) > 30:  # don't spam the error itself
             _error_notice_at[user_id] = now
             await message.reply("❌ **Error:** Message could not be sent.")
         return
 
-    # Bot-generated replies (indexed content, then AI) — plain text only, and rate-limited
-    # per user. The admin has already received the forward above either way.
-    if message.text and _cooldown_ok(user_id):
-        # Indexed content match — if the user's text matches something scanned
-        # from a registered channel (see Plugins/indexer.py), send that directly.
-        try:
-            matches = await search_content(message.text, limit=1)
-        except Exception as e:
-            print(f"[index] search failed: {e}")
-            matches = []
-        if matches and await _send_indexed(client, message, matches[0]):
-            return
-
-        # AI assistant reply — only when GEMINI_API_KEY is configured (see config.py).
-        history = await get_chat_history(user_id)
-        ai_reply = await ask_gemini(history, message.text)
-        if ai_reply:
-            try:
-                # Parse mode off: model output often contains stray *, _ or < that break Telegram parsing.
-                await message.reply(ai_reply[:3800] + AI_FOOTER, parse_mode=enums.ParseMode.DISABLED)
-                await add_chat_turns(user_id, message.text, ai_reply)
-                return
-            except Exception as e:
-                print(f"[ai] couldn't send AI reply: {e}")
-
-    if not _first_in_group(message):
+    if prep is None:
+        await _confirm(message)
         return
-    sent_msg = await message.reply(
-        "✅ <i>Message sent!</i>",
-        parse_mode=enums.ParseMode.HTML
-    )
-    asyncio.create_task(_delete_after_delay(sent_msg))
+
+    # Answer ready quickly -> send just the answer. Still working -> confirm immediately, answer follows.
+    done, _pending = await asyncio.wait({prep}, timeout=CONFIRM_AFTER)
+    confirmed = False
+    if not done:
+        confirmed = await _confirm(message)
+    try:
+        reply = await prep
+    except Exception as e:
+        print(f"[reply] preparing the answer failed: {e}")
+        reply = None
+    if reply and await _deliver_reply(client, message, user_id, reply):
+        return
+    if not confirmed:
+        await _confirm(message)
 
 
 async def _delete_after_delay(msg: Message):
@@ -478,6 +572,28 @@ async def reply_to_user(client: Client, message: Message):
 async def admin_needs_reply(client: Client, message: Message):
     if _group_once("hint", message):
         await message.reply(REPLY_HINT, parse_mode=enums.ParseMode.HTML)
+
+
+@Client.on_message(filters.command("aitest") & filters.private & admin_filter)
+async def ai_test_cmd(client: Client, message: Message):
+    """Admin: checks the AI right now and shows the exact reason if it fails."""
+    info = ai_status()
+    if not info["configured"]:
+        return await message.reply(
+            "❌ <b>AI is OFF</b>\n<code>GEMINI_API_KEY</code> is not set in the bot's environment variables.\n"
+            "Add it (key from aistudio.google.com) and restart the bot.", parse_mode=enums.ParseMode.HTML)
+    wait = await message.reply("⏳ Testing the AI...")
+    started = time.monotonic()
+    answer = await ask_gemini([], "Reply with exactly one word: OK")
+    took = time.monotonic() - started
+    info = ai_status()
+    if answer:
+        text = (f"✅ <b>AI is working</b>\nModel: <code>{html.escape(info['model'])}</code>\n"
+                f"Time: {took:.1f}s\nReply: {html.escape(answer[:100])}")
+    else:
+        text = (f"❌ <b>AI failed</b> ({took:.1f}s)\nModel: <code>{html.escape(info['model'])}</code>\n"
+                f"Reason: <code>{html.escape(str(info['last_error']))}</code>")
+    await wait.edit_text(text, parse_mode=enums.ParseMode.HTML)
 
 
 @Client.on_callback_query(filters.regex("^check_fsub$"))
